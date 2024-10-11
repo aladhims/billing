@@ -12,30 +12,19 @@ func TestNewLoan(t *testing.T) {
 	tests := []struct {
 		name     string
 		options  []LoanOption
-		expected Loan
+		expected Config
 	}{
 		{
-			name:    "Default loan",
-			options: []LoanOption{},
-			expected: Loan{
-				Principal:    DefaultConfig.Principal,
-				InterestRate: DefaultConfig.InterestRate,
-				TotalWeeks:   DefaultConfig.TotalWeeks,
-				Status:       Active,
-			},
+			name:     "Default loan",
+			options:  []LoanOption{},
+			expected: DefaultConfig,
 		},
 		{
 			name: "Custom ID",
 			options: []LoanOption{
 				WithLoanID("custom-id"),
 			},
-			expected: Loan{
-				ID:           "custom-id",
-				Principal:    DefaultConfig.Principal,
-				InterestRate: DefaultConfig.InterestRate,
-				TotalWeeks:   DefaultConfig.TotalWeeks,
-				Status:       Active,
-			},
+			expected: DefaultConfig,
 		},
 		{
 			name: "Custom config",
@@ -46,11 +35,10 @@ func TestNewLoan(t *testing.T) {
 					TotalWeeks:   25,
 				}),
 			},
-			expected: Loan{
+			expected: Config{
 				Principal:    1000000,
 				InterestRate: 0.05,
 				TotalWeeks:   25,
-				Status:       Active,
 			},
 		},
 	}
@@ -59,23 +47,23 @@ func TestNewLoan(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			loan := NewLoan(tt.options...)
 
-			assert.Equal(t, tt.expected.Principal, loan.Principal)
-			assert.Equal(t, tt.expected.InterestRate, loan.InterestRate)
-			assert.Equal(t, tt.expected.TotalWeeks, loan.TotalWeeks)
-			assert.Equal(t, tt.expected.Status, loan.Status)
+			assert.Equal(t, tt.expected.Principal, loan.GetPrincipal())
+			assert.Equal(t, tt.expected.InterestRate, loan.GetInterestRate())
+			assert.Equal(t, tt.expected.TotalWeeks, loan.GetTotalWeeks())
+			assert.Equal(t, Active, loan.GetStatus())
 
-			if tt.expected.ID != "" {
-				assert.Equal(t, tt.expected.ID, loan.ID)
+			if tt.name == "Custom ID" {
+				assert.Equal(t, "custom-id", loan.GetID())
 			} else {
-				_, err := uuid.Parse(loan.ID)
+				_, err := uuid.Parse(loan.GetID())
 				assert.NoError(t, err, "ID should be a valid UUID")
 			}
 
-			assert.InDelta(t, time.Now().Unix(), loan.StartDate.Unix(), 1, "StartDate should be close to now")
+			assert.InDelta(t, time.Now().Unix(), loan.GetStartDate().Unix(), 1, "StartDate should be close to now")
 
 			expectedTotal := tt.expected.Principal * (1 + tt.expected.InterestRate)
-			assert.InDelta(t, expectedTotal, loan.OutstandingDebt, 0.01, "OutstandingDebt should be principal plus interest")
-			assert.InDelta(t, expectedTotal/float64(tt.expected.TotalWeeks), loan.WeeklyPayment, 0.01, "WeeklyPayment should be total divided by weeks")
+			assert.InDelta(t, expectedTotal, loan.GetOutstanding(), 0.01, "OutstandingDebt should be principal plus interest")
+			assert.InDelta(t, expectedTotal/float64(tt.expected.TotalWeeks), loan.GetWeeklyPayment(), 0.01, "WeeklyPayment should be total divided by weeks")
 		})
 	}
 }
@@ -96,44 +84,53 @@ func TestLoan_GetOutstanding(t *testing.T) {
 
 func TestLoan_IsDelinquent(t *testing.T) {
 	tests := []struct {
-		name     string
-		payments []Payment
-		expected bool
+		name      string
+		setupLoan func() *Loan
+		expected  bool
 	}{
 		{
-			name:     "No payments",
-			payments: []Payment{},
-			expected: false,
-		},
-		{
-			name: "One missed payment",
-			payments: []Payment{
-				{Amount: 0, Date: time.Now().Add(-3 * DaysPerWeek * HoursPerDay * time.Hour)},
+			name: "No payments, within two weeks",
+			setupLoan: func() *Loan {
+				loan := NewLoan()
+				loan.startDate = time.Now().Add(-13 * 24 * time.Hour)
+				return loan
 			},
 			expected: false,
 		},
 		{
-			name: "Two missed payments",
-			payments: []Payment{
-				{Amount: 0, Date: time.Now().Add(-3 * DaysPerWeek * HoursPerDay * time.Hour)},
-				{Amount: 0, Date: time.Now().Add(-2 * DaysPerWeek * HoursPerDay * time.Hour)},
+			name: "No payments, over two weeks",
+			setupLoan: func() *Loan {
+				loan := NewLoan()
+				loan.startDate = time.Now().Add(-15 * 24 * time.Hour)
+				return loan
 			},
 			expected: true,
 		},
 		{
-			name: "Two old payments, but not missed",
-			payments: []Payment{
-				{Amount: 22000, Date: time.Now().Add(-3 * DaysPerWeek * HoursPerDay * time.Hour)},
-				{Amount: 22000, Date: time.Now().Add(-2 * DaysPerWeek * HoursPerDay * time.Hour)},
+			name: "Last payment within two weeks",
+			setupLoan: func() *Loan {
+				loan := NewLoan()
+				loan.MakePayment(loan.GetWeeklyPayment())
+				loan.payments[0].Date = time.Now().Add(-13 * 24 * time.Hour)
+				return loan
 			},
 			expected: false,
+		},
+		{
+			name: "Last payment over two weeks ago",
+			setupLoan: func() *Loan {
+				loan := NewLoan()
+				loan.MakePayment(loan.GetWeeklyPayment())
+				loan.payments[0].Date = time.Now().Add(-15 * 24 * time.Hour)
+				return loan
+			},
+			expected: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			loan := NewLoan()
-			loan.Payments = tt.payments
+			loan := tt.setupLoan()
 			assert.Equal(t, tt.expected, loan.IsDelinquent())
 		})
 	}
@@ -184,8 +181,9 @@ func TestLoan_MakePayment(t *testing.T) {
 					InterestRate: 0.10,
 					TotalWeeks:   50,
 				}))
-				loan.OutstandingDebt = 0
-				loan.Status = Closed
+				for loan.GetOutstanding() > 0 {
+					loan.MakePayment(loan.GetWeeklyPayment())
+				}
 				return loan
 			},
 			paymentAmount:  22000,
@@ -201,7 +199,7 @@ func TestLoan_MakePayment(t *testing.T) {
 					InterestRate: 0.10,
 					TotalWeeks:   50,
 				}))
-				loan.StartDate = time.Now().Add(-3 * DaysPerWeek * HoursPerDay * time.Hour)
+				loan.startDate = time.Now().Add(-3 * DaysPerWeek * HoursPerDay * time.Hour)
 				return loan
 			},
 			paymentAmount:  88000,
@@ -217,7 +215,7 @@ func TestLoan_MakePayment(t *testing.T) {
 					InterestRate: 0.10,
 					TotalWeeks:   50,
 				}))
-				loan.OutstandingDebt = 22000
+				loan.outstandingDebt = 22000
 				return loan
 			},
 			paymentAmount:  22000,
@@ -233,8 +231,8 @@ func TestLoan_MakePayment(t *testing.T) {
 					InterestRate: 0.10,
 					TotalWeeks:   50,
 				}))
-				loan.StartDate = time.Now().Add(-3 * DaysPerWeek * HoursPerDay * time.Hour)
-				loan.Payments = []Payment{
+				loan.startDate = time.Now().Add(-3 * DaysPerWeek * HoursPerDay * time.Hour)
+				loan.payments = []Payment{
 					{Amount: 0, Date: time.Now().Add(-3 * DaysPerWeek * HoursPerDay * time.Hour)},
 					{Amount: 0, Date: time.Now().Add(-2 * DaysPerWeek * HoursPerDay * time.Hour)},
 				}
@@ -253,8 +251,8 @@ func TestLoan_MakePayment(t *testing.T) {
 					InterestRate: 0.10,
 					TotalWeeks:   50,
 				}))
-				loan.StartDate = time.Now().Add(-3 * DaysPerWeek * HoursPerDay * time.Hour)
-				loan.Payments = []Payment{
+				loan.startDate = time.Now().Add(-3 * DaysPerWeek * HoursPerDay * time.Hour)
+				loan.payments = []Payment{
 					{Amount: 0, Date: time.Now().Add(-3 * DaysPerWeek * HoursPerDay * time.Hour)},
 					{Amount: 0, Date: time.Now().Add(-2 * DaysPerWeek * HoursPerDay * time.Hour)},
 				}
@@ -278,8 +276,8 @@ func TestLoan_MakePayment(t *testing.T) {
 				assert.NoError(t, err)
 			}
 
-			assert.InDelta(t, tt.expectedDebt, loan.OutstandingDebt, 0.01)
-			assert.Equal(t, tt.expectedStatus, loan.Status, "Loan status should match expected status")
+			assert.InDelta(t, tt.expectedDebt, loan.GetOutstanding(), 0.01)
+			assert.Equal(t, tt.expectedStatus, loan.GetStatus(), "Loan status should match expected status")
 		})
 	}
 }

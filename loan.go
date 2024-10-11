@@ -58,15 +58,15 @@ type Payment struct {
 
 // Loan represents a loan with its properties and methods
 type Loan struct {
-	ID              string
-	Principal       float64
-	InterestRate    float64
-	TotalWeeks      int
-	WeeklyPayment   float64
-	StartDate       time.Time
-	Payments        []Payment
-	OutstandingDebt float64
-	Status          LoanStatus
+	id              string
+	principal       float64
+	interestRate    float64
+	totalWeeks      int
+	weeklyPayment   float64
+	startDate       time.Time
+	payments        []Payment
+	outstandingDebt float64
+	status          LoanStatus
 }
 
 // LoanOption defines a function type for loan options
@@ -75,40 +75,39 @@ type LoanOption func(*Loan)
 // WithLoanID sets a custom ID for the loan
 func WithLoanID(id string) LoanOption {
 	return func(l *Loan) {
-		l.ID = id
+		l.id = id
 	}
 }
 
 // WithLoanConfig sets a custom configuration for the loan
 func WithLoanConfig(config Config) LoanOption {
 	return func(l *Loan) {
-		l.Principal = config.Principal
-		l.InterestRate = config.InterestRate
-		l.TotalWeeks = config.TotalWeeks
-		
+		l.principal = config.Principal
+		l.interestRate = config.InterestRate
+		l.totalWeeks = config.TotalWeeks
+
 		totalInterest := config.Principal * config.InterestRate
 		totalAmount := config.Principal + totalInterest
-		l.WeeklyPayment = totalAmount / float64(config.TotalWeeks)
-		l.OutstandingDebt = totalAmount
+		l.weeklyPayment = totalAmount / float64(config.TotalWeeks)
+		l.outstandingDebt = totalAmount
 	}
 }
 
 // NewLoan creates a new loan with the given options
 func NewLoan(options ...LoanOption) *Loan {
 	loan := &Loan{
-		ID:              uuid.New().String(),
-		Principal:       DefaultConfig.Principal,
-		InterestRate:    DefaultConfig.InterestRate,
-		TotalWeeks:      DefaultConfig.TotalWeeks,
-		StartDate:       time.Now(),
-		Status:          Active,
+		id:           uuid.New().String(),
+		principal:    DefaultConfig.Principal,
+		interestRate: DefaultConfig.InterestRate,
+		totalWeeks:   DefaultConfig.TotalWeeks,
+		startDate:    time.Now(),
+		status:       Active,
 	}
 
-
-	totalInterest := loan.Principal * loan.InterestRate
-	totalAmount := loan.Principal + totalInterest
-	loan.WeeklyPayment = totalAmount / float64(loan.TotalWeeks)
-	loan.OutstandingDebt = totalAmount
+	totalInterest := loan.principal * loan.interestRate
+	totalAmount := loan.principal + totalInterest
+	loan.weeklyPayment = totalAmount / float64(loan.totalWeeks)
+	loan.outstandingDebt = totalAmount
 
 	for _, option := range options {
 		option(loan)
@@ -117,57 +116,92 @@ func NewLoan(options ...LoanOption) *Loan {
 	return loan
 }
 
+// GetID returns the ID of the loan
+func (l *Loan) GetID() string {
+	return l.id
+}
+
 // GetOutstanding returns the current outstanding debt of the loan
 func (l *Loan) GetOutstanding() float64 {
-	return l.OutstandingDebt
+	return l.outstandingDebt
+}
+
+// GetPrincipal returns the principal amount of the loan
+func (l *Loan) GetPrincipal() float64 {
+	return l.principal
+}
+
+// GetInterestRate returns the interest rate of the loan
+func (l *Loan) GetInterestRate() float64 {
+	return l.interestRate
+}
+
+// GetTotalWeeks returns the total number of weeks for the loan
+func (l *Loan) GetTotalWeeks() int {
+	return l.totalWeeks
+}
+
+// GetWeeklyPayment returns the weekly payment amount
+func (l *Loan) GetWeeklyPayment() float64 {
+	return l.weeklyPayment
+}
+
+// GetStartDate returns the start date of the loan
+func (l *Loan) GetStartDate() time.Time {
+	return l.startDate
+}
+
+// GetStatus returns the current status of the loan
+func (l *Loan) GetStatus() LoanStatus {
+	return l.status
+}
+
+// GetPayments returns a copy of the payments slice
+func (l *Loan) GetPayments() []Payment {
+	paymentsCopy := make([]Payment, len(l.payments))
+	copy(paymentsCopy, l.payments)
+	return paymentsCopy
 }
 
 // IsDelinquent checks if the loan is delinquent
 func (l *Loan) IsDelinquent() bool {
-	if len(l.Payments) < 2 {
-		return false
+	if len(l.payments) > 0 {
+		lastPaymentDate := l.payments[len(l.payments)-1].Date
+		return time.Since(lastPaymentDate) > DelinquencyThreshold
 	}
 
-	lastPaymentDate := l.Payments[len(l.Payments)-1].Date
-	secondLastPaymentDate := l.Payments[len(l.Payments)-2].Date
-
-	twoWeeksAgo := time.Now().Add(-2 * DaysPerWeek * HoursPerDay * time.Hour)
-
-	return lastPaymentDate.Before(twoWeeksAgo) &&
-		secondLastPaymentDate.Before(twoWeeksAgo) &&
-		l.Payments[len(l.Payments)-1].Amount == 0 &&
-		l.Payments[len(l.Payments)-2].Amount == 0
+	return time.Since(l.startDate) > DelinquencyThreshold
 }
 
 // MakePayment records a payment for the loan
 func (l *Loan) MakePayment(amount float64) error {
-	currentWeek := int(time.Since(l.StartDate).Hours() / (DaysPerWeek * HoursPerDay))
+	currentWeek := int(time.Since(l.startDate).Hours() / (DaysPerWeek * HoursPerDay))
 	expectedPayments := currentWeek + 1 // +1 because payments start from week 0
-	actualPayments := len(l.Payments)
+	actualPayments := len(l.payments)
 	missedPayments := expectedPayments - actualPayments
 
 	if missedPayments > 0 {
-		expectedAmount := float64(missedPayments) * l.WeeklyPayment
+		expectedAmount := float64(missedPayments) * l.weeklyPayment
 		if amount < expectedAmount {
 			return fmt.Errorf("payment amount must be at least %.2f for %d missed payments", expectedAmount, missedPayments)
 		}
-	} else if amount != l.WeeklyPayment {
+	} else if amount != l.weeklyPayment {
 		return errors.New("payment amount must be equal to the weekly payment")
 	}
 
-	if l.OutstandingDebt <= 0 {
+	if l.outstandingDebt <= 0 {
 		return errors.New("loan is already fully paid")
 	}
 
-	l.Payments = append(l.Payments, Payment{Amount: amount, Date: time.Now()})
-	l.OutstandingDebt -= amount
+	l.payments = append(l.payments, Payment{Amount: amount, Date: time.Now()})
+	l.outstandingDebt -= amount
 
-	if l.OutstandingDebt <= 0 {
-		l.Status = Closed
+	if l.outstandingDebt <= 0 {
+		l.status = Closed
 	} else if l.IsDelinquent() {
-		l.Status = Delinquent
+		l.status = Delinquent
 	} else {
-		l.Status = Active
+		l.status = Active
 	}
 
 	return nil
@@ -175,9 +209,9 @@ func (l *Loan) MakePayment(amount float64) error {
 
 // GetBillingSchedule returns the weekly payment schedule for the loan
 func (l *Loan) GetBillingSchedule() []float64 {
-	schedule := make([]float64, l.TotalWeeks)
+	schedule := make([]float64, l.totalWeeks)
 	for i := range schedule {
-		schedule[i] = l.WeeklyPayment
+		schedule[i] = l.weeklyPayment
 	}
 	return schedule
 }
