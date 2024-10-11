@@ -128,11 +128,15 @@ func (l *Loan) IsDelinquent() bool {
 		return false
 	}
 
-	lastTwoPayments := l.Payments[len(l.Payments)-2:]
-	expectedLastPaymentDate := l.StartDate.Add(time.Duration(len(l.Payments)-1) * DaysPerWeek * HoursPerDay * time.Hour)
+	lastPaymentDate := l.Payments[len(l.Payments)-1].Date
+	secondLastPaymentDate := l.Payments[len(l.Payments)-2].Date
 
-	return time.Since(expectedLastPaymentDate) > DelinquencyThreshold &&
-		lastTwoPayments[0].Amount == 0 && lastTwoPayments[1].Amount == 0
+	twoWeeksAgo := time.Now().Add(-2 * DaysPerWeek * HoursPerDay * time.Hour)
+
+	return lastPaymentDate.Before(twoWeeksAgo) &&
+		secondLastPaymentDate.Before(twoWeeksAgo) &&
+		l.Payments[len(l.Payments)-1].Amount == 0 &&
+		l.Payments[len(l.Payments)-2].Amount == 0
 }
 
 // MakePayment records a payment for the loan
