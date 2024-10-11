@@ -47,7 +47,7 @@ type Config struct {
 var DefaultConfig = Config{
 	Principal:    float64(DefaultPrincipal),
 	InterestRate: DefaultInterestRate,
-	TotalWeeks:   DefaultLoanDurationWeeks,
+	TotalWeeks:   DefaultLoanDurationWeeks, // TODO: can consider to improve on duration instead of weekly-based duration
 }
 
 // Payment represents a single payment made towards a loan
